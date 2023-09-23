@@ -1,4 +1,5 @@
 #include "HTTPClient.h"
+#include <future>
 
 HTTPClient::HTTPClient()
 {
@@ -99,20 +100,60 @@ void HTTPClient::sendHttpRequest(const std::string& url)
 
 void HTTPClient::receiveAndPrintResponse()
 {
-    const int bufferSize = 4096;
-    char buffer[bufferSize];
-    std::stringstream response;
+    WSAPOLLFD wsaDescriptor{};
+    wsaDescriptor.fd = sock;
+    wsaDescriptor.events = POLLIN;
+    wsaDescriptor.revents = 0;
 
+    //std::future<void> receiveJob = std::async(&HTTPClient::receiveMessage, this, std::launch::deferred);
+
+    bool nextMessageAvailable = false;
+    
     while (true) 
+    {
+        int result = WSAPoll(&wsaDescriptor, 1, 1);
+        if (result > 0 && wsaDescriptor.revents & POLLIN)
+        {
+            if (!nextMessageAvailable)
+            {
+                std::cout << "Press space to display next message...\n";
+            }
+            std::cout << "New package received.\n";
+            nextMessageAvailable = true;
+        }
+
+        if (isSpaceButtonPressed() && nextMessageAvailable)
+        {
+            system("CLS");
+            std::cout << messageQueue.front() << std::endl;
+            messageQueue.pop();
+            if (messageQueue.empty())
+            {
+                nextMessageAvailable = false;
+            }
+        }
+    }
+}
+
+bool HTTPClient::isSpaceButtonPressed() const
+{
+    return GetKeyState(VK_SPACE) & 0x8000;
+}
+
+void HTTPClient::receiveMessage()
+{
+    const int bufferSize = 128;
+    char buffer[bufferSize];
+
+    while (true)
     {
         memset(buffer, 0, bufferSize);
         int bytesRead = recv(sock, buffer, bufferSize - 1, 0);
-        if (bytesRead <= 0) 
+        if (bytesRead <= 0)
         {
             break;
         }
-        response << buffer;
-    }
 
-    std::cout << response.str() << std::endl;
+        messageQueue.push(buffer);
+    }
 }

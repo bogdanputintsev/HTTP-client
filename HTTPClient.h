@@ -5,6 +5,9 @@
 #include <sstream>
 #include <winsock2.h>
 #include <Ws2tcpip.h>
+#include <conio.h>
+#include <thread>
+#include <queue>
 
 #pragma comment(lib, "ws2_32.lib")
 
@@ -23,7 +26,9 @@ private:
 	void connectToServer();
 	void sendHttpRequest(const std::string& url);
 	void receiveAndPrintResponse();
-	
+
+	bool isSpaceButtonPressed() const;
+	void receiveMessage();
 	static constexpr int PORT = 80;
 	static constexpr int CODE_SUCCESS = 0;
 
@@ -35,5 +40,7 @@ private:
 
 	bool wsaInitialized = false;
 	bool socketInitialized = false;
+	std::queue<std::string> messageQueue;
+
 };
 
