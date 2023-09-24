@@ -1,12 +1,8 @@
 #pragma once
 
-#include <iostream>
+#include <mutex>
 #include <string>
-#include <sstream>
 #include <winsock2.h>
-#include <Ws2tcpip.h>
-#include <conio.h>
-#include <thread>
 #include <queue>
 
 #pragma comment(lib, "ws2_32.lib")
@@ -16,30 +12,40 @@ class HTTPClient final
 public:
 	HTTPClient();
 	~HTTPClient();
+	HTTPClient(HTTPClient&) = delete;
+	HTTPClient(HTTPClient&&) = delete;
+	HTTPClient& operator=(const HTTPClient&) = delete;
+	HTTPClient& operator=(HTTPClient&&) = delete;
 
-	void getResponse(const std::string& http);
+	void getResponse(const std::string& url);
 private:
+	static constexpr int PORT = 80;
+	static constexpr int CODE_SUCCESS = 0;
+	static constexpr int BUFFER_SIZE = 256;
+	static constexpr long long LAG_DELAY_SECONDS = 5;
+
 	void initWsa();
 	void initSocket();
 	std::string getIpAddressFromUrl(const std::string& url);
 	void setupServerDetails(const std::string& ipAddress);
 	void connectToServer();
-	void sendHttpRequest(const std::string& url);
+	void sendHttpRequest(const std::string& url) const;
 	void receiveAndPrintResponse();
 
-	bool isSpaceButtonPressed() const;
+	static bool isSpaceButtonDown();
+	static bool isSpaceButtonUp();
 	void receiveMessage();
-	static constexpr int PORT = 80;
-	static constexpr int CODE_SUCCESS = 0;
 
-	WSADATA wsaData;
-	SOCKET sock;
-	struct addrinfo hints {};
-	struct addrinfo* serverAddressInfo;
-	struct sockaddr_in serverAddress {};
+	WSADATA wsaData{};
+	SOCKET sock{};
+	addrinfo hints {};
+	addrinfo* serverAddressInfo{};
+	sockaddr_in serverAddress {};
 
 	bool wsaInitialized = false;
 	bool socketInitialized = false;
+
+	std::mutex messageQueueMutex;
 	std::queue<std::string> messageQueue;
 
 };

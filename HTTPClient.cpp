@@ -1,5 +1,8 @@
 #include "HTTPClient.h"
 #include <future>
+#include <iostream>
+#include <ws2ipdef.h>
+#include <Ws2tcpip.h>
 
 HTTPClient::HTTPClient()
 {
@@ -54,15 +57,15 @@ std::string HTTPClient::getIpAddressFromUrl(const std::string& url)
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_INET;
 
-    int result = getaddrinfo(url.c_str(), nullptr, &hints, &serverAddressInfo);
+    const int result = getaddrinfo(url.c_str(), nullptr, &hints, &serverAddressInfo);
     if (result != CODE_SUCCESS)
     {
-        std::cerr << "Failed to get IP address: " << gai_strerrorA(result) << std::endl;
+        std::cerr << "Failed to get IP address: " << gai_strerror(result) << std::endl;
         throw std::runtime_error("HTTPClient: Failed to get IP address");
     }
 
     char ipAddress[INET_ADDRSTRLEN];
-    inet_ntop(AF_INET, &((struct sockaddr_in*)(serverAddressInfo->ai_addr))->sin_addr, ipAddress, INET_ADDRSTRLEN);
+    inet_ntop(AF_INET, &reinterpret_cast<sockaddr_in*>(serverAddressInfo->ai_addr)->sin_addr, ipAddress, INET_ADDRSTRLEN);
     freeaddrinfo(serverAddressInfo);
 
     return std::string{ ipAddress };
@@ -86,7 +89,7 @@ void HTTPClient::connectToServer()
     }
 }
 
-void HTTPClient::sendHttpRequest(const std::string& url)
+void HTTPClient::sendHttpRequest(const std::string& url) const
 {
     const std::string request = "GET / HTTP/1.1\r\n"
         "Host: " + url + "\r\n"
@@ -100,60 +103,100 @@ void HTTPClient::sendHttpRequest(const std::string& url)
 
 void HTTPClient::receiveAndPrintResponse()
 {
-    WSAPOLLFD wsaDescriptor{};
-    wsaDescriptor.fd = sock;
-    wsaDescriptor.events = POLLIN;
+	WSAPOLLFD wsaDescriptor;
+	wsaDescriptor.fd = sock;
+	wsaDescriptor.events = POLLIN;
     wsaDescriptor.revents = 0;
 
-    //std::future<void> receiveJob = std::async(&HTTPClient::receiveMessage, this, std::launch::deferred);
+	const auto receiveJob = std::async(std::launch::async, &HTTPClient::receiveMessage, this);
+	bool nextMessageAvailable = false;
+    bool spaceButtonWasPressed = false;
 
-    bool nextMessageAvailable = false;
-    
-    while (true) 
-    {
-        int result = WSAPoll(&wsaDescriptor, 1, 1);
-        if (result > 0 && wsaDescriptor.revents & POLLIN)
+	while (true)
+	{
+		const int pollResult = WSAPoll(&wsaDescriptor, 1, 1);
+        if (pollResult == SOCKET_ERROR)
         {
-            if (!nextMessageAvailable)
-            {
-                std::cout << "Press space to display next message...\n";
-            }
-            std::cout << "New package received.\n";
-            nextMessageAvailable = true;
+            throw std::runtime_error("Socket error occurred.");
         }
 
-        if (isSpaceButtonPressed() && nextMessageAvailable)
+        if(pollResult > 0 && wsaDescriptor.revents & POLLIN)
+		{
+			std::cout << "\nNew package received.\n";
+			if (!nextMessageAvailable)
+			{
+                printf("Press sp ace to display next message...\n");
+			}
+			nextMessageAvailable = true;
+		}
+
+        if(isSpaceButtonDown())
         {
-            system("CLS");
-            std::cout << messageQueue.front() << std::endl;
-            messageQueue.pop();
+            spaceButtonWasPressed = true;
+        }
+
+        if (spaceButtonWasPressed && isSpaceButtonUp() && nextMessageAvailable)
+        {
+            spaceButtonWasPressed = false;
+
+            const auto jobStatus = receiveJob.wait_for(std::chrono::milliseconds(0));
+
+            std::unique_lock<std::mutex> lock(messageQueueMutex);
             if (messageQueue.empty())
             {
+                lock.unlock();  
                 nextMessageAvailable = false;
+                if (jobStatus == std::future_status::ready)
+                {
+                    break;
+                }
+
+                printf("\nWaiting for new packages...\n");
             }
-        }
-    }
+            else
+            {
+                system("CLS");
+                printf("%s\n", messageQueue.front().c_str());
+                messageQueue.pop();
+            }
+		}
+	}
 }
 
-bool HTTPClient::isSpaceButtonPressed() const
+bool HTTPClient::isSpaceButtonDown()
 {
-    return GetKeyState(VK_SPACE) & 0x8000;
+    return GetAsyncKeyState(VK_SPACE) & 0x8000;
+}
+
+bool HTTPClient::isSpaceButtonUp()
+{
+    return GetAsyncKeyState(VK_SPACE) == 0;
 }
 
 void HTTPClient::receiveMessage()
 {
-    const int bufferSize = 128;
-    char buffer[bufferSize];
+    char buffer[BUFFER_SIZE];
+
+    auto timeOfLastReceivedMessage = std::chrono::system_clock::now();
 
     while (true)
     {
-        memset(buffer, 0, bufferSize);
-        int bytesRead = recv(sock, buffer, bufferSize - 1, 0);
-        if (bytesRead <= 0)
-        {
-            break;
-        }
+        const auto now = std::chrono::system_clock::now();
+        const auto secondsAfterLastMessage = std::chrono::duration_cast<std::chrono::seconds>(now - timeOfLastReceivedMessage).count();
 
-        messageQueue.push(buffer);
+        if (secondsAfterLastMessage > LAG_DELAY_SECONDS)
+        {
+            timeOfLastReceivedMessage = std::chrono::system_clock::now();
+            memset(buffer, 0, BUFFER_SIZE);
+            const int bytesRead = recv(sock, buffer, BUFFER_SIZE - 1, 0);
+            if (bytesRead <= 0)
+            {
+                break;
+            }
+
+            std::lock_guard<std::mutex> lock(messageQueueMutex);
+            messageQueue.push(buffer);
+        }
+        
     }
 }
